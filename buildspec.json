@@ -36,13 +36,13 @@
             "bundleId": "com.example.obs-plugintemplate"
         }
     },
-    "name": "obs-plugintemplate",
-    "displayName": "OBS Plugin Template",
+    "name": "obs-replay-buffer-move-to-folder",
+    "displayName": "Replay Buffer - move to folder",
     "version": "1.0.0",
-    "author": "Your Name Here",
-    "website": "https://example.com",
-    "email": "me@example.com",
+    "author": "Yelov",
+    "website": "https://github.com/YelovSK/OBS-replay-buffer-move-to-folder",
+    "email": "hampatrik@gmail.com",
     "uuids": {
-        "windowsApp": "00000000-0000-0000-0000-000000000000"
+        "windowsApp": "5d438ade-9cff-48ae-876a-1bdd4cb42e1d"
     }
 }
