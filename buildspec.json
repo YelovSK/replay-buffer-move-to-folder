@@ -36,11 +36,11 @@
             "bundleId": "com.example.obs-plugintemplate"
         }
     },
-    "name": "obs-replay-buffer-move-to-folder",
+    "name": "replay-buffer-move-to-folder",
     "displayName": "Replay Buffer - move to folder",
     "version": "1.0.0",
     "author": "Yelov",
-    "website": "https://github.com/YelovSK/OBS-replay-buffer-move-to-folder",
+    "website": "https://github.com/YelovSK/replay-buffer-move-to-folder",
     "email": "hampatrik@gmail.com",
     "uuids": {
         "windowsApp": "5d438ade-9cff-48ae-876a-1bdd4cb42e1d"
