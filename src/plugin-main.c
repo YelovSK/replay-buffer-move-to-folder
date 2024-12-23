@@ -50,16 +50,20 @@ void on_frontend_event(enum obs_frontend_event event, void *data)
 
 	TIMER_START
 
-	char replay_path[MAX_PATH];
-	if (get_last_replay_path(replay_path) == FAILURE)
-		return;
+	char *replay_path = obs_frontend_get_last_replay();
 
 	char game_path[MAX_PATH];
-	if (get_active_window_path(game_path, MAX_PATH) == FAILURE)
+	if (get_active_window_path(game_path, MAX_PATH) == FAILURE) {
+		bfree(replay_path);
 		return;
+	}
 
-	if (move_file_to_new_location(replay_path, game_path) == FAILURE)
+	if (move_file_to_new_location(replay_path, game_path) == FAILURE) {
+		bfree(replay_path);
 		return;
+	}
+
+	bfree(replay_path);
 
 	TIMER_STOP
 }
@@ -77,56 +81,19 @@ void obs_module_unload(void)
 	obs_frontend_remove_event_callback(on_frontend_event, NULL);
 }
 
-int get_last_replay_path(char *buffer)
-{
-	obs_output_t *output = obs_frontend_get_replay_buffer_output();
-	if (!output) {
-		obs_log(LOG_WARNING, "Failed to get replay buffer output");
-		return FAILURE;
-	}
-
-	calldata_t *calldata = calldata_create();
-	if (!calldata) {
-		obs_log(LOG_WARNING, "Failed to create calldata");
-		obs_output_release(output);
-		return FAILURE;
-	}
-
-	proc_handler_t *handler = obs_output_get_proc_handler(output);
-	if (!handler) {
-		obs_log(LOG_WARNING, "Failed to get proc handler");
-		calldata_destroy(calldata);
-		obs_output_release(output);
-		return FAILURE;
-	}
-
-	BOOL is_found = proc_handler_call(handler, "get_last_replay", calldata);
-	if (!is_found) {
-		obs_log(LOG_WARNING, "Failed to get last replay");
-		calldata_destroy(calldata);
-		obs_output_release(output);
-		return FAILURE;
-	}
-
-	strcpy(buffer, calldata_string(calldata, "path"));
-
-	calldata_destroy(calldata);
-	obs_output_release(output);
-
-	return SUCCESS;
-}
-
 bool is_fullscreen(HWND hwnd)
 {
-	WINDOWPLACEMENT wp;
-	wp.length = sizeof(WINDOWPLACEMENT);
-
 	if (!IsWindowVisible(hwnd)) {
 		return false;
 	}
+
 	if (IsZoomed(hwnd)) {
 		return true;
 	}
+
+	// Check window dimensions
+	WINDOWPLACEMENT wp;
+	wp.length = sizeof(WINDOWPLACEMENT);
 	if (!GetWindowPlacement(hwnd, &wp)) {
 		return false;
 	}
@@ -163,7 +130,7 @@ int get_active_window_path(char *buffer, int buffer_size)
 		if (!is_fullscreen(hwnd))
 			continue;
 
-		if (get_executable_path(hwnd, buffer, buffer_size) != 0)
+		if (get_executable_path(hwnd, buffer, buffer_size) == FAILURE)
 			continue;
 
 		if (is_ignored_path(buffer))
@@ -172,7 +139,17 @@ int get_active_window_path(char *buffer, int buffer_size)
 		return SUCCESS;
 	}
 
-	return FAILURE;
+	// Default to foreground (active) window
+	obs_log(LOG_INFO, "Defaulting to foreground window");
+	HWND foreground = GetForegroundWindow();
+	if (!foreground)
+		return FAILURE;
+
+	wchar_t wide_buffer[MAX_PATH];
+	GetWindowText(foreground, wide_buffer, MAX_PATH);
+	convert_tchar_to_char(wide_buffer, buffer, sizeof(buffer));	
+
+	return SUCCESS;
 }
 
 int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
@@ -190,6 +167,7 @@ int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
 		CloseHandle(h_process);
 		return FAILURE;
 	}
+
 	CloseHandle(h_process);
 
 	convert_tchar_to_char(executable_path, buffer, buffer_size);
@@ -207,55 +185,51 @@ BOOL is_ignored_path(const char *path)
 	return FALSE;
 }
 
-int move_file_to_new_location(const char *source_file_path,
-			      const char *window_file_path)
+int move_file_to_new_location(const char *source_file_path, const char *window_file_path)
 {
 	// 1. Get executable name, e.g. C:\Games\game.exe -> game
 	char window_name[MAX_PATH];
 	_splitpath_s(window_file_path, NULL, 0, NULL, 0, window_name, MAX_PATH, NULL, 0);
-	char *dot_pos = strrchr(window_name, '.');
-	// Remove extension
-	if (dot_pos) {
-		*dot_pos = '\0';
-	}
 
 	// 2. Get the replay buffer base folder
 	char source_dir[MAX_PATH];
-	get_path_without_file(source_file_path, source_dir);
+	if (get_path_without_file(source_file_path, source_dir) == FAILURE)
+		return FAILURE;
 
 	// 3. Construct the new file path
 	char new_dir[MAX_PATH];
 	snprintf(new_dir, MAX_PATH, "%s/%s", source_dir, window_name);
 	char new_file_path[MAX_PATH];
-	snprintf(new_file_path, MAX_PATH, "%s/%s", new_dir,
-		 strrchr(source_file_path, '/') + 1);
+	snprintf(new_file_path, MAX_PATH, "%s/%s", new_dir, strrchr(source_file_path, '/') + 1);
 
 	// 4. Create the directory if it doesn't exist
 	CreateDirectoryA(new_dir, NULL);
 
 	// 5. Move recording
 	obs_log(LOG_INFO, "Moving %s to %s", source_file_path, new_file_path);
-	if (!MoveFileA(source_file_path, new_file_path)) {
+	if (!MoveFileA(source_file_path, new_file_path))
 		return FAILURE;
-	}
 
 	return SUCCESS;
 }
 
-void get_path_without_file(const char *full_path, char *path_without_file)
+int get_path_without_file(const char *full_path, char *path_without_file)
 {
 	// Find the last occurrence of the directory separator
 	const char *last_slash = strrchr(full_path, '/');
-	if (!last_slash) {
+	if (!last_slash)
 		last_slash = strrchr(full_path, '\\');
-	}
+	if (!last_slash)
+		return FAILURE;
 
 	size_t length = last_slash - full_path;
 	strncpy(path_without_file, full_path, length);
-	path_without_file[length] = '\0'; // Null-terminate the string
+	path_without_file[length] = '\0';
+
+	return SUCCESS;
 }
 
-void convert_tchar_to_char(const TCHAR *source, char *dest, size_t dest_size)
+void convert_tchar_to_char(const wchar_t *source, char *dest, size_t dest_size)
 {
 #ifdef _UNICODE
 	wcstombs_s(NULL, dest, dest_size, source, _TRUNCATE);
