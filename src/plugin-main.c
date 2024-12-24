@@ -36,16 +36,16 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 	obs_log(LOG_INFO, "Done in %f milliseconds", interval);
 
 // Would ideally use regex, but don't feel like setting up PCRE as a dependency.
-static const char *IGNORED_NAMES[] = {
-	"GameBar",
-	"NVIDIA Overlay",
-	"Widgets",
-	"TabTip",
+static const wchar_t *IGNORED_NAMES[] = {
+	L"GameBar",
+	L"NVIDIA Overlay",
+	L"Widgets",
+	L"TabTip",
 };
 
-static const char *IGNORED_PATHS[] = {
-	"C:\\Windows\\",
-	"C:\\Program Files\\Common Files\\microsoft shared\\",
+static const wchar_t *IGNORED_PATHS[] = {
+	L"C:\\Windows\\",
+	L"C:\\Program Files\\Common Files\\microsoft shared\\",
 };
 
 OBS_DECLARE_MODULE()
@@ -61,25 +61,28 @@ void on_frontend_event(enum obs_frontend_event event, void *data)
 	char *replay_path = obs_frontend_get_last_replay();
 	if (!replay_path) {
 		obs_log(LOG_ERROR, "Failed to fetch the last replay");
-		return;	
+		goto free;
 	}
 
-	char window_name[MAX_PATH];
+	size_t len = mbstowcs(NULL, replay_path, 0) + 1;
+	wchar_t *wide_replay_path = malloc(len * sizeof(wchar_t));
+	mbstowcs(wide_replay_path, replay_path, len);
+
+	wchar_t window_name[MAX_PATH];
 	if (get_active_window_name(window_name, MAX_PATH) == FAILURE) {
-		bfree(replay_path);
 		obs_log(LOG_ERROR, "Failed to get active window");
-		return;
+		goto free;
 	}
 
-	if (move_file_to_new_location(replay_path, window_name) == FAILURE) {
-		bfree(replay_path);
+	if (move_file_to_new_location(wide_replay_path , window_name) == FAILURE) {
 		obs_log(LOG_ERROR, "Failed to move recording");
-		return;
+		goto free;
 	}
-
-	bfree(replay_path);
 
 	TIMER_STOP
+
+free:
+	bfree(replay_path);
 }
 
 bool obs_module_load(void)
@@ -121,7 +124,7 @@ bool is_fullscreen(HWND hwnd)
 		wp.rcNormalPosition.bottom >= rc_desktop.bottom);
 }
 
-int get_active_window_name(char *buffer, int buffer_size)
+int get_active_window_name(wchar_t *buffer, int buffer_size)
 {
 	// Window with the highest Z index
 	HWND hwnd = GetTopWindow(GetDesktopWindow());
@@ -141,7 +144,7 @@ int get_active_window_name(char *buffer, int buffer_size)
 		// At the same time exe name is also not great because it's not always descriptive, e.g. The Finals is running from Discovery.exe
 		//GetWindowTextA(hwnd, buffer, buffer_size);
 
-		_splitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
+		_wsplitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
 
 		if (is_ignored_name(buffer))
 			continue;
@@ -159,7 +162,7 @@ int get_active_window_name(char *buffer, int buffer_size)
 	if (get_executable_path(foreground, buffer, buffer_size) == FAILURE)
 		return FAILURE;
 
-	_splitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
+	_wsplitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
 
 	if (is_ignored_name(buffer))
 		return FAILURE;
@@ -167,7 +170,7 @@ int get_active_window_name(char *buffer, int buffer_size)
 	return SUCCESS;
  }
 
-int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
+int get_executable_path(HWND hwnd, wchar_t *buffer, int buffer_size)
 {
 	DWORD process_id;
 	GetWindowThreadProcessId(hwnd, &process_id);
@@ -177,7 +180,7 @@ int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
 		return FAILURE;
 	}
 
-	if (GetModuleFileNameExA(h_process, NULL, buffer, MAX_PATH) == 0) {
+	if (GetModuleFileNameExW(h_process, NULL, buffer, MAX_PATH) == 0) {
 		CloseHandle(h_process);
 		return FAILURE;
 	}
@@ -187,10 +190,10 @@ int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
 	return SUCCESS;
 }
 
-BOOL is_ignored_path(const char *path)
+BOOL is_ignored_path(const wchar_t *path)
 {
 	for (size_t i = 0; i < sizeof(IGNORED_PATHS) / sizeof(IGNORED_PATHS[0]); i++) {
-		if (strstr(path, IGNORED_PATHS[i])) {
+		if (wcsstr(path, IGNORED_PATHS[i])) {
 			return TRUE;
 		}
 	}
@@ -198,10 +201,10 @@ BOOL is_ignored_path(const char *path)
 	return FALSE;
 }
 
-BOOL is_ignored_name(const char *name)
+BOOL is_ignored_name(const wchar_t *name)
 {
 	for (size_t i = 0; i < sizeof(IGNORED_NAMES) / sizeof(IGNORED_NAMES[0]); i++) {
-		if (strcmp(name, IGNORED_NAMES[i]) == 0) {
+		if (wcscmp(name, IGNORED_NAMES[i]) == 0) {
 			return TRUE;
 		}
 	}
@@ -209,42 +212,42 @@ BOOL is_ignored_name(const char *name)
 	return FALSE;
 }
 
-int move_file_to_new_location(const char *source_file_path, const char *window_name)
+int move_file_to_new_location(const wchar_t *source_file_path, const wchar_t *window_name)
 {
 	// 1. Get the replay buffer base folder
-	char source_dir[MAX_PATH];
+	wchar_t source_dir[MAX_PATH];
 	if (get_path_without_file(source_file_path, source_dir) == FAILURE)
 		return FAILURE;
 
 	// 2. Construct the new file path
-	char new_dir[MAX_PATH];
-	snprintf(new_dir, MAX_PATH, "%s/%s", source_dir, window_name);
-	char new_file_path[MAX_PATH];
-	snprintf(new_file_path, MAX_PATH, "%s/%s", new_dir, strrchr(source_file_path, '/') + 1);
+	wchar_t new_dir[MAX_PATH];
+	wchar_t new_file_path[MAX_PATH];
+	swprintf(new_dir, MAX_PATH, L"%ls/%ls", source_dir, window_name);
+	swprintf(new_file_path, MAX_PATH, L"%ls/%ls", new_dir, wcsrchr(source_file_path, '/') + 1);
 
 	// 3. Create the directory if it doesn't exist
-	CreateDirectoryA(new_dir, NULL);
+	CreateDirectoryW(new_dir, NULL);
 
 	// 4. Move recording
-	obs_log(LOG_INFO, "Moving %s to %s", source_file_path, new_file_path);
+	obs_log(LOG_INFO, "Moving %ls to %ls", source_file_path, new_file_path);
 
-	if (!MoveFileA(source_file_path , new_file_path))
+	if (!MoveFileW(source_file_path , new_file_path))
 		return FAILURE;
 
 	return SUCCESS;
 }
 
-int get_path_without_file(const char *full_path, char *path_without_file)
+int get_path_without_file(const wchar_t *full_path, wchar_t *path_without_file)
 {
 	// Find the last occurrence of the directory separator
-	const char *last_slash = strrchr(full_path, '/');
+	const wchar_t *last_slash = wcsrchr(full_path, '/');
 	if (!last_slash)
-		last_slash = strrchr(full_path, '\\');
+		last_slash = wcsrchr(full_path, '\\');
 	if (!last_slash)
 		return FAILURE;
 
 	size_t length = last_slash - full_path;
-	strncpy(path_without_file, full_path, length);
+	wcsncpy(path_without_file, full_path, length);
 	path_without_file[length] = '\0';
 
 	return SUCCESS;
