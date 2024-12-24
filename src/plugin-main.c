@@ -35,9 +35,17 @@ with this program. If not, see <https://www.gnu.org/licenses/>
 	interval = (float)(t2.QuadPart - t1.QuadPart) * 1000.0 / frequency.QuadPart;\
 	obs_log(LOG_INFO, "Done in %f milliseconds", interval);
 
-static const char *IGNORES[] = {
+// Would ideally use regex, but don't feel like setting up PCRE as a dependency.
+static const char *IGNORED_NAMES[] = {
+	"GameBar",
+	"NVIDIA Overlay",
+	"Widgets",
+	"TabTip",
+};
+
+static const char *IGNORED_PATHS[] = {
 	"C:\\Windows\\",
-	"C:\\Program Files\\Common Files\\microsoft shared\\"
+	"C:\\Program Files\\Common Files\\microsoft shared\\",
 };
 
 OBS_DECLARE_MODULE()
@@ -51,15 +59,21 @@ void on_frontend_event(enum obs_frontend_event event, void *data)
 	TIMER_START
 
 	char *replay_path = obs_frontend_get_last_replay();
+	if (!replay_path) {
+		obs_log(LOG_ERROR, "Failed to fetch the last replay");
+		return;	
+	}
 
-	char game_path[MAX_PATH];
-	if (get_active_window_path(game_path, MAX_PATH) == FAILURE) {
+	char window_name[MAX_PATH];
+	if (get_active_window_name(window_name, MAX_PATH) == FAILURE) {
 		bfree(replay_path);
+		obs_log(LOG_ERROR, "Failed to get active window");
 		return;
 	}
 
-	if (move_file_to_new_location(replay_path, game_path) == FAILURE) {
+	if (move_file_to_new_location(replay_path, window_name) == FAILURE) {
 		bfree(replay_path);
+		obs_log(LOG_ERROR, "Failed to move recording");
 		return;
 	}
 
@@ -107,26 +121,13 @@ bool is_fullscreen(HWND hwnd)
 		wp.rcNormalPosition.bottom >= rc_desktop.bottom);
 }
 
-BOOL starts_with(const char *str, const char *prefix)
+int get_active_window_name(char *buffer, int buffer_size)
 {
-	if (!str || !prefix) {
-		return FALSE;
-	}
+	// Window with the highest Z index
+	HWND hwnd = GetTopWindow(GetDesktopWindow());
 
-	size_t prefix_len = strlen(prefix);
-	size_t str_len = strlen(str);
-	if (prefix_len > str_len) {
-		return FALSE;
-	}
-
-	return strncmp(str, prefix, prefix_len) == 0;
-}
-
-int get_active_window_path(char *buffer, int buffer_size)
-{
-	HWND hwnd = NULL;
-
-	while ((hwnd = FindWindowEx(NULL, hwnd, NULL, NULL)) != NULL) {
+	// Iterate windows from highest Z index to lowest
+	do {
 		if (!is_fullscreen(hwnd))
 			continue;
 
@@ -136,21 +137,35 @@ int get_active_window_path(char *buffer, int buffer_size)
 		if (is_ignored_path(buffer))
 			continue;
 
+		// Window name instead of exe name. Not great because some windows have other info, e.g. firefox has the tab name etc.
+		// At the same time exe name is also not great because it's not always descriptive, e.g. The Finals is running from Discovery.exe
+		//GetWindowTextA(hwnd, buffer, buffer_size);
+
+		_splitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
+
+		if (is_ignored_name(buffer))
+			continue;
+
 		return SUCCESS;
-	}
+	} while (hwnd = GetWindow(hwnd, GW_HWNDNEXT));
 
 	// Default to foreground (active) window
 	obs_log(LOG_INFO, "Defaulting to foreground window");
 	HWND foreground = GetForegroundWindow();
+
 	if (!foreground)
 		return FAILURE;
 
-	wchar_t wide_buffer[MAX_PATH];
-	GetWindowText(foreground, wide_buffer, MAX_PATH);
-	convert_tchar_to_char(wide_buffer, buffer, sizeof(buffer));	
+	if (get_executable_path(foreground, buffer, buffer_size) == FAILURE)
+		return FAILURE;
+
+	_splitpath_s(buffer, NULL, 0, NULL, 0, buffer, MAX_PATH, NULL, 0);
+
+	if (is_ignored_name(buffer))
+		return FAILURE;
 
 	return SUCCESS;
-}
+ }
 
 int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
 {
@@ -162,52 +177,58 @@ int get_executable_path(HWND hwnd, char *buffer, int buffer_size)
 		return FAILURE;
 	}
 
-	TCHAR executable_path[MAX_PATH];
-	if (GetModuleFileNameEx(h_process, NULL, executable_path, MAX_PATH) == 0) {
+	if (GetModuleFileNameExA(h_process, NULL, buffer, MAX_PATH) == 0) {
 		CloseHandle(h_process);
 		return FAILURE;
 	}
 
 	CloseHandle(h_process);
 
-	convert_tchar_to_char(executable_path, buffer, buffer_size);
-
 	return SUCCESS;
 }
 
 BOOL is_ignored_path(const char *path)
 {
-	for (size_t i = 0; i < sizeof(IGNORES) / sizeof(IGNORES[0]); i++) {
-		if (starts_with(path, IGNORES[i])) {
+	for (size_t i = 0; i < sizeof(IGNORED_PATHS) / sizeof(IGNORED_PATHS[0]); i++) {
+		if (strstr(path, IGNORED_PATHS[i])) {
 			return TRUE;
 		}
 	}
+
 	return FALSE;
 }
 
-int move_file_to_new_location(const char *source_file_path, const char *window_file_path)
+BOOL is_ignored_name(const char *name)
 {
-	// 1. Get executable name, e.g. C:\Games\game.exe -> game
-	char window_name[MAX_PATH];
-	_splitpath_s(window_file_path, NULL, 0, NULL, 0, window_name, MAX_PATH, NULL, 0);
+	for (size_t i = 0; i < sizeof(IGNORED_NAMES) / sizeof(IGNORED_NAMES[0]); i++) {
+		if (strcmp(name, IGNORED_NAMES[i]) == 0) {
+			return TRUE;
+		}
+	}
 
-	// 2. Get the replay buffer base folder
+	return FALSE;
+}
+
+int move_file_to_new_location(const char *source_file_path, const char *window_name)
+{
+	// 1. Get the replay buffer base folder
 	char source_dir[MAX_PATH];
 	if (get_path_without_file(source_file_path, source_dir) == FAILURE)
 		return FAILURE;
 
-	// 3. Construct the new file path
+	// 2. Construct the new file path
 	char new_dir[MAX_PATH];
 	snprintf(new_dir, MAX_PATH, "%s/%s", source_dir, window_name);
 	char new_file_path[MAX_PATH];
 	snprintf(new_file_path, MAX_PATH, "%s/%s", new_dir, strrchr(source_file_path, '/') + 1);
 
-	// 4. Create the directory if it doesn't exist
+	// 3. Create the directory if it doesn't exist
 	CreateDirectoryA(new_dir, NULL);
 
-	// 5. Move recording
+	// 4. Move recording
 	obs_log(LOG_INFO, "Moving %s to %s", source_file_path, new_file_path);
-	if (!MoveFileA(source_file_path, new_file_path))
+
+	if (!MoveFileA(source_file_path , new_file_path))
 		return FAILURE;
 
 	return SUCCESS;
@@ -227,13 +248,4 @@ int get_path_without_file(const char *full_path, char *path_without_file)
 	path_without_file[length] = '\0';
 
 	return SUCCESS;
-}
-
-void convert_tchar_to_char(const wchar_t *source, char *dest, size_t dest_size)
-{
-#ifdef _UNICODE
-	wcstombs_s(NULL, dest, dest_size, source, _TRUNCATE);
-#else
-	strncpy_s(dest, dest_size, source, _TRUNCATE);
-#endif
 }

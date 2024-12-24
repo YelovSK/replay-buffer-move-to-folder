@@ -38,7 +38,7 @@
     },
     "name": "replay-buffer-move-to-folder",
     "displayName": "Replay Buffer - move to folder",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "author": "Yelov",
     "website": "https://github.com/YelovSK/replay-buffer-move-to-folder",
     "email": "hampatrik@gmail.com",
