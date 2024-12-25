@@ -35,12 +35,12 @@ extern const char *PLUGIN_VERSION;
 void obs_log(int log_level, const char *format, ...);
 extern void blogva(int log_level, const char *format, va_list args);
 
-int get_active_window_name(wchar_t *buffer, int buffer_size);
+int get_active_window_name(wchar_t *window_name, int window_name_size);
 BOOL is_ignored_path(const wchar_t  *path);
 BOOL is_ignored_name(const wchar_t  *name);
 int get_executable_path(HWND hwnd, wchar_t *buffer, int buffer_size);
 BOOL move_file_to_new_location(const wchar_t *source_file_path, const wchar_t *exe_file_path);
-int get_path_without_file(const wchar_t *full_path, wchar_t *path_without_file);
+void replace_char(wchar_t *str, wchar_t target, wchar_t replacement);
 
 #ifdef __cplusplus
 }
